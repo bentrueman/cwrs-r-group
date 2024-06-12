@@ -1,8 +1,10 @@
 
 # This week we're building a simple neural network to illustrate the concept. We'll need the two 
 # functions contained in "neural-network-inputs.R"---one to update the parameters and one to 
-# simulate the data. This script draws heavily from the excellent resource Tea & Stats 
-# (https://selbydavid.com/2018/01/09/neural-network/)
+# simulate the data. This script draws heavily from these resources:
+
+# 1. https://selbydavid.com/2018/01/09/neural-network/
+# 2. https://m-clark.github.io/models-by-example/neural-network.html
 
 # setup -------------------------------------------------------------------
 
