@@ -107,72 +107,160 @@ input_adaptive_window <- input_adaptive_window |>
 p2 <- p1 +
   geom_line(
     data = input_adaptive_window,
-    aes(y = output_adaptive_window, col = "Moving average")
+    aes(y = output_adaptive_window, col = "Moving average (adaptive window)")
   ) +
   labs(col = NULL)
 
 p2
 
-# local linear regression -------------------------------------------------
+# this estimate is a step function because we're assigning the moving average output
+# to an integer hour. if we instead assign to output to an interpolated fractional hour,
+# we get a smooth function, although the mapping of moving average output to fractional hour
+# is arbitrary
 
-# the moving average above is a step function because we have a discrete x variable (hour).
+# interpolated moving average ---------------------------------------------
 
-# but if we use linear regression instead of just averaging, we can smoothly interpolate between the
-# discrete hour-long intervals by making predictions from a different linear regression model fitted
-# at each time point to data within the window (i.e., "local linear regression"). this will give us a 
-# more realistic summary of the weekday pattern in bike traffic.
+# create the input to moving average function:
 
-# create the input to the local linear regression. this time, we're going to be making predictions over
-# a grid of possible time points - not just averaging on the hour:
-
-input_local_linear_regression <- bike_traffic_subset |> 
+input_interpolated <- bike_traffic_subset |> 
   select(hour, bike_count) |> 
-  # create a regular grid of times over which to make predictions:
   group_by(hour) |> 
-  mutate(hour_interpolated = seq(min(hour), min(hour) + 1, length.out = length(hour))) |> 
-  ungroup() |> 
-  arrange(hour)
+  mutate(hour_interpolated = seq(unique(hour), unique(hour) + 1, length.out = length(hour))) |> 
+  ungroup()
 
-# create a vector of weights for our data. this ensures that the output is smooth, since as the window moves,
-# new points that enter it have only a small influence on the prediction until they migrate to the center of 
-# the window. call plot(tricube_weights) to see why.
+# future_map() applies our function to each row of the input dataframe, processing in parallel for speed:
 
-tricube_weights <- (1 - abs(window / max(abs(window))) ^ 3) ^ 3 # one of many possible weight functions
+output_interpolated <- future_map_dbl(
+  seq(nrow(input_interpolated)), moving_average_adaptive_window, .progress = TRUE
+)
 
-# our new function uses lm() and predict() instead of mean():
+# add the output to the input:
 
-local_linear_regression <- function(x) {
+input_interpolated <- input_interpolated |> 
+  mutate(output_interpolated)
+
+# add the results to our plot ---------------------------------------------
+
+p3 <- p2 +
+  geom_line(
+    data = input_interpolated,
+    aes(hour_interpolated, output_interpolated, col = "Moving average (interpolated)")
+  ) +
+  labs(col = NULL)
+
+p3
+
+# this is still not completely smooth, because when data enters the window,
+# they can have a discontinuous effect on the moving average. we can solve this by 
+# downweighting the edges of the window, using tricube weights.
+
+# weighted moving average -------------------------------------------------
+
+tricube_weights <- (1 - abs(window / max(abs(window))) ^ 3) ^ 3
+
+plot(tricube_weights, type = "l")
+
+# create the input to moving average function:
+
+input_weighted <- input_interpolated
+
+# redefine our function:
+
+moving_average_weighted <- function(x) {
   keep_these_rows <- x + window
   # make sure keep_these_rows is positive (we can't include points before the first point) and at most 
   # equal to the number of rows in the input (the moving average estimate for the last point will only 
   # include time points in the past)
-  valid_rows <- keep_these_rows > 0 & keep_these_rows <= nrow(input_local_linear_regression)
+  valid_rows <- keep_these_rows > 0 & keep_these_rows <= nrow(input_weighted)
   keep_these_rows <- keep_these_rows[valid_rows]
   tricube_weights <- tricube_weights[valid_rows]
-  input_local_linear_regression |> 
+  input_weighted |> 
+    slice(keep_these_rows) |> 
+    with(mean(bike_count * tricube_weights, na.rm = TRUE))
+}
+
+# future_map() applies our function to each row of the input dataframe, processing in parallel for speed:
+
+output_weighted <- future_map_dbl(
+  seq(nrow(input_weighted)), moving_average_weighted, .progress = TRUE
+)
+
+# add the output to the input:
+
+input_weighted <- input_weighted |> 
+  mutate(output_weighted)
+
+# add the results to our plot ---------------------------------------------
+
+p4 <- p3 +
+  geom_line(
+    data = input_weighted,
+    aes(hour_interpolated, output_weighted, col = "Moving average (weighted)")
+  ) +
+  labs(col = NULL)
+
+p4
+
+# we now have a smooth function, but it is damped significantly by the weights, which haven't been 
+# normalized. we can solve this, and make a much more natural connection between the moving average and 
+# the interpolated fractional hours, by using linear regression instead of a simple average. that way, 
+# we can actually make a prediction from a linear model at each fractional hour.
+
+# local linear regression ("loess") ---------------------------------------
+
+# create the input to moving average function:
+
+input_local_linear <- input_interpolated
+
+# redefine our function:
+
+moving_average_local_linear <- function(x) {
+  keep_these_rows <- x + window
+  # make sure keep_these_rows is positive (we can't include points before the first point) and at most 
+  # equal to the number of rows in the input (the moving average estimate for the last point will only 
+  # include time points in the past)
+  valid_rows <- keep_these_rows > 0 & keep_these_rows <= nrow(input_local_linear)
+  keep_these_rows <- keep_these_rows[valid_rows]
+  tricube_weights <- tricube_weights[valid_rows]
+  input_local_linear |> 
     slice(keep_these_rows) |> 
     with(predict(
-      lm(bike_count ~ hour, weights = tricube_weights), 
-      newdata = tibble(hour = input_local_linear_regression$hour_interpolated[x])
+      # here we are doing quadratic regression, which captures nonlinear variation 
+      # better than linear regression:
+      lm(bike_count ~ hour + I(hour ^ 2), weights = tricube_weights), 
+      newdata = tibble(hour = input_local_linear$hour_interpolated[x])
     ))
 }
 
 # future_map() applies our function to each row of the input dataframe, processing in parallel for speed:
 
-output_local_linear_regression <- future_map_dbl(
-  seq(nrow(input_local_linear_regression)), local_linear_regression, .progress = TRUE
+output_local_linear <- future_map_dbl(
+  seq(nrow(input_local_linear)), moving_average_local_linear, .progress = TRUE
 )
 
 # add the output to the input:
 
-input_local_linear_regression <- input_local_linear_regression |> 
-  mutate(output_local_linear_regression)
+input_local_linear <- input_local_linear |> 
+  mutate(output_local_linear)
 
-# add results to the plot -------------------------------------------------
+# the result is almost the same as the output of geom_smooth(method = "loess"),
+# which uses a similar algorithm:
 
-p2 + 
+# add the results to our plot ---------------------------------------------
+
+p5 <- p4 +
   geom_line(
-    data = input_local_linear_regression,
-    aes(hour_interpolated, output_local_linear_regression, col = "Local linear regression")
-  )
+    data = input_local_linear,
+    aes(hour_interpolated, output_local_linear, col = "Moving average (local linear)")
+  ) +
+  labs(col = NULL)
 
+p5 + 
+  geom_smooth(
+    aes(col = "geom_smooth()"), 
+    method = "loess", 
+    span = 0.2,
+    se = FALSE, 
+    linewidth = 0.6
+  )
+  
