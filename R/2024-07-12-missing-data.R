@@ -88,7 +88,7 @@ grid_output <- crossing(beta0, beta1, sigma) |>
     log_likelihood = sum(dnorm(
       log(fish$Hg[-missing_value]), 
       mean = beta0 + beta1 * log(fish$WatMeHg[-missing_value]), 
-      sd = .data$sigma, 
+      sd = sigma, 
       log = TRUE
     ))
   ) |> 
@@ -162,7 +162,7 @@ grid_output <- crossing(beta0, beta1, sigma, x_missing) |>
     log_likelihood = sum(dnorm(
       log(fish$Hg), 
       mean = beta0 + beta1 * replace_na(log(fish$WatMeHg), x_missing), 
-      sd = .data$sigma, 
+      sd = sigma, 
       log = TRUE
     ))
   ) |> 
