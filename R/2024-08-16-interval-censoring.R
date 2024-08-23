@@ -39,5 +39,47 @@ pb_wide |>
     y = "[Pb] (ppb) - after",
     col = NULL, fill = NULL
   )
-  
-# ... to be continued 
+
+# calculate before/after differences --------------------------------------
+
+pairwise_differences <- pb_wide |> 
+  transmute(
+    site,
+    censoring = paste(bdl_before, bdl_after),
+    lower_bound = case_when(
+      censoring %in% c("FALSE FALSE", "TRUE FALSE") ~ pb_ppb_after - pb_ppb_before,
+      censoring %in% c("TRUE TRUE", "FALSE TRUE") ~ -pb_ppb_before
+    ),
+    upper_bound = case_when(
+      censoring %in% c("FALSE FALSE", "FALSE TRUE") ~ pb_ppb_after - pb_ppb_before,
+      censoring %in% c("TRUE TRUE", "TRUE FALSE") ~ pb_ppb_after
+    ),
+    censoring = censoring != "FALSE FALSE"
+  )
+
+# model the pairwise differences graphically ------------------------------
+
+# our model:
+# pairwise_differences ~ N(mu, sigma)
+
+mu <- 1
+sigma <- 1
+
+tibble(
+  x = seq(from = mu - 4 * sigma, to = mu + 4 * sigma, length.out = 200),
+  y = dnorm(x = x, mean = mu, sd = sigma)
+) |> 
+  ggplot() +
+  geom_line(aes(x = x, y = y)) + 
+  geom_point(data = filter(pairwise_differences, !censoring), aes(x = lower_bound, y = 0)) +
+  geom_linerange(
+    data = filter(pairwise_differences, censoring),
+    aes(xmin = lower_bound, xmax = upper_bound, y = -0.025, col = site)
+  ) + 
+  labs(
+    x = "Pairwise difference",
+    y = "Normal density"
+  )
+
+# ... to be continued
+
